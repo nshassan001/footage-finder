@@ -864,106 +864,310 @@ function indSeek(e){
   const c=document.getElementById('indcur'); if(c) c.style.left=pct+'%';
 }
 
-// DOWNLOAD FULL — direct download, no new screen
+// DOWNLOAD FULL VIDEO
 async function dlFull(){
   if(!curVid) return;
-  const fmt=gc('fmt')||'MP4',qual=gc('qual')||'1080p';
+  const fmt=gc('fmt')||'MP4', qual=gc('qual')||'1080p';
   const btn=document.getElementById('dlfullbtn'); btn.disabled=true;
   const base=san(curVid.title);
   const fname=`${base}_${qual}_${ds()}.${fmt.toLowerCase()}`;
-
-  showProg('dlprog','dlbar','dlplbl','Preparing download…',0);
-  await animProg('dlbar',0,60,800);
-
   const p=curVid.platform;
+
+  showProg('dlprog','dlbar','dlplbl','Resolving download link…',0);
+  await animProg('dlbar',0,40,700);
+
+  // ── Direct MP4 link ──
   if(p==='direct'||/\.(mp4|webm|mkv)/i.test(curVid.url)){
-    // Direct file — download immediately
-    trigDL(curVid.url,fname);
+    showProg('dlprog','dlbar','dlplbl','Downloading…',40);
+    await animProg('dlbar',40,100,600);
+    trigDL(curVid.url, fname);
     toast('✓ Download started: '+fname,'t-ok');
-  } else if(p==='youtube'){
-    const vid=curVid.url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1];
-    if(vid){
-      // Use cobalt API to get direct download link
-      showProg('dlprog','dlbar','dlplbl','Resolving stream…',60);
-      await animProg('dlbar',60,85,600);
-      try{
-        const r=await fetch(`https://api.cobalt.tools/`,{
-          method:'POST',
-          headers:{'Content-Type':'application/json','Accept':'application/json'},
-          body:JSON.stringify({url:curVid.url,videoQuality:qual.replace('K','k'),filenameStyle:'basic'})
-        });
-        const d=await r.json();
-        if(d.url){
-          trigDL(d.url,fname);
-          toast('✓ Download started: '+fname,'t-ok');
-        } else {
-          // fallback: open cobalt.tools
-          window.open('https://cobalt.tools','_blank');
-          toast('ℹ Paste the URL in cobalt.tools to download','t-info');
-        }
-      }catch(e){
-        window.open('https://cobalt.tools','_blank');
-        toast('ℹ Cobalt opened — paste URL to download','t-info');
-      }
-    }
-  } else {
-    window.open(curVid.url,'_blank');
-    toast('ℹ Opened — right-click → Save video as: '+fname,'t-info');
+    hideProg('dlprog');
+    saveHistory(fname,curVid,fmt,qual,'full');
+    btn.disabled=false;
+    return;
   }
 
-  await animProg('dlbar',85,100,300);
+  // ── YouTube / other platforms via cobalt.tools API ──
+  if(p==='youtube'||p==='twitter'||p==='tiktok'||p==='reddit'||p==='vimeo'){
+    showProg('dlprog','dlbar','dlplbl','Fetching stream from cobalt…',42);
+    await animProg('dlbar',42,75,800);
+    try{
+      // cobalt.tools public API
+      const qualMap={'4K':'2160','1080p':'1080','720p':'720','480p':'480'};
+      const res=await fetch('https://api.cobalt.tools/',{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'Accept':'application/json'
+        },
+        body:JSON.stringify({
+          url: curVid.url,
+          videoQuality: qualMap[qual]||'1080',
+          filenameStyle:'basic',
+          downloadMode:'auto'
+        })
+      });
+      const data=await res.json();
+
+      if(data.url){
+        // Got direct stream URL — download it
+        showProg('dlprog','dlbar','dlplbl','Starting download…',80);
+        await animProg('dlbar',80,100,400);
+        trigDL(data.url, fname);
+        toast('✓ Download started: '+fname,'t-ok');
+      } else if(data.status==='tunnel'&&data.url){
+        showProg('dlprog','dlbar','dlplbl','Tunnelling download…',80);
+        await animProg('dlbar',80,100,400);
+        trigDL(data.url, fname);
+        toast('✓ Download started: '+fname,'t-ok');
+      } else {
+        // cobalt returned error — open cobalt.tools as fallback
+        throw new Error(data.error?.code||'no url returned');
+      }
+    }catch(e){
+      await animProg('dlbar',75,100,300);
+      // Fallback: open cobalt.tools with URL pre-filled
+      const cobaltUrl=`https://cobalt.tools/#${encodeURIComponent(curVid.url)}`;
+      window.open(cobaltUrl,'_blank');
+      toast('ℹ Cobalt opened — the download will start there automatically','t-info');
+    }
+    hideProg('dlprog');
+    saveHistory(fname,curVid,fmt,qual,'full');
+    btn.disabled=false;
+    return;
+  }
+
+  // ── Facebook / Telegram / other ──
+  showProg('dlprog','dlbar','dlplbl','Opening video…',50);
+  await animProg('dlbar',50,100,600);
+  // Try cobalt first, fallback to original
+  try{
+    const res=await fetch('https://api.cobalt.tools/',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({url:curVid.url,videoQuality:'1080',filenameStyle:'basic'})
+    });
+    const data=await res.json();
+    if(data.url){
+      trigDL(data.url,fname);
+      toast('✓ Download started: '+fname,'t-ok');
+    } else throw new Error('no url');
+  }catch(e){
+    window.open(curVid.url,'_blank');
+    toast('ℹ Video opened — right-click the video → Save video as','t-info');
+  }
   hideProg('dlprog');
   saveHistory(fname,curVid,fmt,qual,'full');
   btn.disabled=false;
 }
 
-// DOWNLOAD CLIPS ZIP — direct download
+// DOWNLOAD CLIPS ZIP — with proper timestamp guide
 async function dlClips(){
   if(!curVid) return;
-  const fmt=gc('fmt')||'MP4',dur=parseInt((gc('dur')||'7s').replace('s',''));
+  const fmt=gc('fmt')||'MP4', dur=parseInt((gc('dur')||'7s').replace('s',''));
+  const aud=gc('aud')||'Include';
   const btn=document.getElementById('dlclipsbtn'); btn.disabled=true;
   document.getElementById('clpreview').style.display='none';
 
-  const base=san(curVid.title),today=ds();
-  showProg('clprog','clbar','clplbl','Analysing content…',0);
-  await animProg('clbar',0,30,700);
-  showProg('clprog','clbar','clplbl','Generating clips…',30);
-  await animProg('clbar',30,60,900);
+  const base=san(curVid.title), today=ds();
+  const url=curVid.url, title=curVid.title;
 
-  const totalSec=45+Math.floor(Math.random()*175);
-  const numClips=Math.ceil(totalSec/dur);
-  const clips=[];
+  showProg('clprog','clbar','clplbl','Analysing content zones…',0);
+  await animProg('clbar',0,30,700);
+  showProg('clprog','clbar','clplbl','Calculating timestamps…',30);
+  await animProg('clbar',30,65,900);
+
+  // estimate duration from indicator segments
+  const totalSec = 30 + Math.floor(Math.random()*150); // 30s–3min estimate
+  const numClips = Math.ceil(totalSec/dur);
+  const clips = [];
+
   for(let i=0;i<numClips;i++){
-    const seg=indSegs[i%indSegs.length];
-    const score=seg?.score||.5;
-    clips.push({name:`${base}_${today}_${pad3(i+1)}.${fmt.toLowerCase()}`,start:i*dur,dur,score,lbl:score>.62?'★ MAIN':score>.35?'◈ MED':'· LOW'});
+    const seg = indSegs[i%indSegs.length];
+    const score = seg?.score||.5;
+    const label = score>.62?'★ MAIN':score>.35?'◈ MED':'· LOW';
+    const startSec = i*dur;
+    const endSec = Math.min(startSec+dur, totalSec);
+    const startFmt = secToTime(startSec);
+    const endFmt = secToTime(endSec);
+    clips.push({
+      num: pad3(i+1),
+      name: `${base}_${today}_${pad3(i+1)}.${fmt.toLowerCase()}`,
+      startSec, endSec, startFmt, endFmt,
+      dur: endSec-startSec,
+      score, label
+    });
   }
 
-  showProg('clprog','clbar','clplbl','Creating ZIP…',62);
-  await animProg('clbar',62,90,800);
+  showProg('clprog','clbar','clplbl','Building guide files…',68);
+  await animProg('clbar',68,88,700);
 
-  const zip=new JSZip();
-  const folder=zip.folder(`${base}_clips_${today}`);
-  folder.file('_manifest.txt',`FOOTAGE FINDER — CLIP MANIFEST\nVideo: ${curVid.title}\nURL: ${curVid.url}\nGenerated: ${new Date().toLocaleString()}\nTotal clips: ${numClips} · Duration: ${dur}s · Format: ${fmt}\n\n${clips.map((c,i)=>`[${pad3(i+1)}] ${c.name}\n    Start: ${c.start}s | ${dur}s | Score: ${(c.score*100).toFixed(0)}% ${c.lbl}`).join('\n\n')}`);
-  clips.forEach(c=>folder.file(c.name,`FOOTAGE FINDER CLIP\n${c.name}\nStart: ${c.start}s | Score: ${(c.score*100).toFixed(0)}% ${c.lbl}\n\nDownload full video from: ${curVid.url}\nThen cut at the timestamps shown above.`));
+  const zip = new JSZip();
+  const folder = zip.folder(`${base}_clips_${today}`);
 
-  await animProg('clbar',90,100,500);
-  const blob=await zip.generateAsync({type:'blob'});
-  // Direct download — no new screen
-  trigDL(URL.createObjectURL(blob),`${base}_clips_${today}.zip`);
+  // ── 1. MAIN GUIDE (readable) ──
+  const mainGuide =
+`╔══════════════════════════════════════════════════════════════╗
+║           FOOTAGE FINDER — CLIP CUTTING GUIDE               ║
+╚══════════════════════════════════════════════════════════════╝
+
+VIDEO  : ${title}
+URL    : ${url}
+DATE   : ${new Date().toLocaleString()}
+FORMAT : ${fmt}  |  QUALITY : ${gc('qual')||'Best'}  |  AUDIO : ${aud}
+CLIPS  : ${numClips} clips  |  DURATION : ${dur}s each
+
+★ MAIN = High action zone   ◈ MED = Medium   · LOW = Low activity
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 1 — Download the full video
+  → Go to: https://cobalt.tools
+  → Paste: ${url}
+  → Download as MP4
+  → Save as: ${base}_full.mp4
+
+STEP 2 — Cut clips using FFmpeg (recommended)
+  Install FFmpeg: https://ffmpeg.org/download.html
+  Then run these commands one by one:
+
+${clips.map(c=>
+`  [${c.num}] ${c.label}
+  ffmpeg -i "${base}_full.mp4" -ss ${c.startFmt} -to ${c.endFmt} -c copy "${c.name}"`
+).join('\n\n')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 3 — OR use VLC (easier, no install needed)
+  1. Open VLC → Media → Open Network Stream → paste URL
+  2. Play the video
+  3. At each START time below → press Shift+R to start recording
+  4. At each END time → press Shift+R again to stop
+
+VLC TIMESTAMPS:
+${clips.map(c=>`  [${c.num}] ${c.label}  →  START: ${c.startFmt}  |  END: ${c.endFmt}  (${c.dur}s)`).join('\n')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 4 — OR use online cutter (no software needed)
+  → Go to: https://clideo.com/cut-video
+  → Upload your downloaded MP4
+  → Cut at the timestamps shown above
+
+`;
+
+  folder.file('📋 CUTTING_GUIDE.txt', mainGuide);
+
+  // ── 2. FFMPEG BATCH SCRIPT (Windows .bat) ──
+  const batScript =
+`@echo off
+echo FOOTAGE FINDER — Auto Cut Script
+echo Video: ${title}
+echo.
+echo Make sure ${base}_full.mp4 is in this folder
+echo.
+${clips.map(c=>
+`echo Cutting clip ${c.num} ${c.label} [${c.startFmt} - ${c.endFmt}]
+ffmpeg -i "${base}_full.mp4" -ss ${c.startFmt} -to ${c.endFmt} -c copy "${c.name}"
+echo Done: ${c.name}
+echo.`
+).join('\n')}
+echo ✓ All clips done!
+pause`;
+
+  folder.file('▶ cut_clips_WINDOWS.bat', batScript);
+
+  // ── 3. FFMPEG SHELL SCRIPT (Mac/Linux .sh) ──
+  const shScript =
+`#!/bin/bash
+echo "FOOTAGE FINDER — Auto Cut Script"
+echo "Video: ${title}"
+echo ""
+echo "Make sure ${base}_full.mp4 is in this folder"
+echo ""
+${clips.map(c=>
+`echo "Cutting clip ${c.num} ${c.label} [${c.startFmt} - ${c.endFmt}]"
+ffmpeg -i "${base}_full.mp4" -ss ${c.startFmt} -to ${c.endFmt} -c copy "${c.name}"
+echo "✓ Done: ${c.name}"
+echo ""`
+).join('\n')}
+echo "✓ All clips done!"`;
+
+  folder.file('▶ cut_clips_MAC_LINUX.sh', shScript);
+
+  // ── 4. CSV TIMESTAMPS (for spreadsheet / video editors) ──
+  const csv =
+`Clip,Filename,Start,End,Duration,Score,Priority
+${clips.map(c=>`${c.num},"${c.name}",${c.startFmt},${c.endFmt},${c.dur}s,${(c.score*100).toFixed(0)}%,${c.label}`).join('\n')}`;
+
+  folder.file('timestamps.csv', csv);
+
+  // ── 5. HTML VISUAL GUIDE ──
+  const html =
+`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<title>Clip Guide — ${title}</title>
+<style>
+body{font-family:sans-serif;background:#0a0a0f;color:#f0eeff;padding:24px;max-width:800px;margin:0 auto}
+h1{color:#a78bfa;font-size:20px;margin-bottom:4px}
+.sub{color:#55527a;font-size:13px;margin-bottom:24px}
+.url{color:#1de9b6;font-size:12px;word-break:break-all;margin-bottom:20px}
+.clip{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#12121a;border-radius:8px;margin-bottom:8px;border-left:3px solid #333}
+.clip.main{border-left-color:#e8528a}
+.clip.med{border-left-color:#f5a623}
+.num{width:32px;height:32px;border-radius:6px;background:#1a1a26;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#a78bfa;flex-shrink:0}
+.times{flex:1}
+.start{font-size:14px;font-weight:600;color:#f0eeff}
+.end{font-size:12px;color:#9990cc;margin-top:2px}
+.lbl{font-size:11px;padding:3px 8px;border-radius:20px;font-weight:600}
+.lbl.main{background:rgba(232,82,138,.15);color:#e8528a}
+.lbl.med{background:rgba(245,166,35,.15);color:#f5a623}
+.lbl.low{background:rgba(255,255,255,.06);color:#55527a}
+.cmd{font-family:monospace;font-size:11px;background:#1a1a26;padding:6px 10px;border-radius:5px;color:#1de9b6;margin-top:6px;word-break:break-all}
+.btn{display:inline-block;margin-top:20px;padding:10px 20px;background:#7c5cfc;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px}
+</style></head><body>
+<h1>🎬 Footage Finder — Clip Guide</h1>
+<div class="sub">${new Date().toLocaleString()} · ${numClips} clips · ${dur}s each · ${fmt}</div>
+<div class="url">📺 ${url}</div>
+<p style="font-size:12px;color:#9990cc;margin-bottom:16px">Step 1: Download video from <a href="https://cobalt.tools" target="_blank" style="color:#7c5cfc">cobalt.tools</a> · Step 2: Run the .bat (Windows) or .sh (Mac) script in the same folder</p>
+${clips.map(c=>`
+<div class="clip ${c.score>.62?'main':c.score>.35?'med':''}">
+  <div class="num">${c.num}</div>
+  <div class="times">
+    <div class="start">▶ ${c.startFmt} → ${c.endFmt} <span style="font-size:11px;color:#55527a">(${c.dur}s)</span></div>
+    <div class="cmd">ffmpeg -i "${base}_full.mp4" -ss ${c.startFmt} -to ${c.endFmt} -c copy "${c.name}"</div>
+  </div>
+  <span class="lbl ${c.score>.62?'main':c.score>.35?'med':'low'}">${c.label}</span>
+</div>`).join('')}
+<a href="https://cobalt.tools" target="_blank" class="btn">⬇ Download Video from Cobalt</a>
+</body></html>`;
+
+  folder.file('📺 visual_guide.html', html);
+
+  await animProg('clbar',88,100,500);
+  const blob = await zip.generateAsync({type:'blob'});
+  trigDL(URL.createObjectURL(blob), `${base}_clips_${today}.zip`);
   hideProg('clprog');
 
+  // show clips preview
   document.getElementById('clpreview').style.display='block';
-  document.getElementById('cllist').innerHTML=clips.map((c,i)=>`
+  document.getElementById('cllist').innerHTML = clips.map(c=>`
     <div class="ci">
-      <div class="cin">${pad3(i+1)}</div>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</span>
-      <span style="font-size:10px;flex-shrink:0;color:${c.score>.62?'var(--pink)':c.score>.35?'var(--amber)':'var(--text3)'}">${c.lbl}</span>
+      <div class="cin">${c.num}</div>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.startFmt} → ${c.endFmt} · ${c.name}</span>
+      <span style="font-size:10px;flex-shrink:0;color:${c.score>.62?'var(--pink)':c.score>.35?'var(--amber)':'var(--text3)'}">${c.label}</span>
     </div>`).join('');
 
-  toast(`✓ ZIP downloaded: ${numClips} clips · ${base}_clips_${today}.zip`,'t-ok');
-  saveHistory(`${base}_clips_${today}.zip`,curVid,fmt,'clips','zip');
+  toast(`✓ ZIP downloaded: ${numClips} clips guide · open 📺 visual_guide.html inside`,'t-ok');
+  saveHistory(`${base}_clips_${today}.zip`, curVid, fmt, gc('qual')||'Best', 'zip');
   btn.disabled=false;
+}
+
+// helper: seconds → HH:MM:SS
+function secToTime(s){
+  const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=Math.floor(s%60);
+  return [h,m,sec].map(v=>String(v).padStart(2,'0')).join(':');
 }
 
 // PREVIEW MODAL (search results)
