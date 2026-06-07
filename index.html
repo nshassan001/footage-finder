@@ -873,93 +873,65 @@ async function dlFull(){
   const fname=`${base}_${qual}_${ds()}.${fmt.toLowerCase()}`;
   const p=curVid.platform;
 
-  showProg('dlprog','dlbar','dlplbl','Resolving download link…',0);
-  await animProg('dlbar',0,40,700);
+  showProg('dlprog','dlbar','dlplbl','Preparing download…',0);
+  await animProg('dlbar',0,50,600);
 
-  // ── Direct MP4 link ──
+  // ── Direct MP4/WebM/MKV link — download immediately ──
   if(p==='direct'||/\.(mp4|webm|mkv)/i.test(curVid.url)){
-    showProg('dlprog','dlbar','dlplbl','Downloading…',40);
-    await animProg('dlbar',40,100,600);
     trigDL(curVid.url, fname);
+    await animProg('dlbar',50,100,400);
+    hideProg('dlprog');
     toast('✓ Download started: '+fname,'t-ok');
-    hideProg('dlprog');
     saveHistory(fname,curVid,fmt,qual,'full');
     btn.disabled=false;
     return;
   }
 
-  // ── YouTube / other platforms via cobalt.tools API ──
-  if(p==='youtube'||p==='twitter'||p==='tiktok'||p==='reddit'||p==='vimeo'){
-    showProg('dlprog','dlbar','dlplbl','Fetching stream from cobalt…',42);
-    await animProg('dlbar',42,75,800);
-    try{
-      // cobalt.tools public API
-      const qualMap={'4K':'2160','1080p':'1080','720p':'720','480p':'480'};
-      const res=await fetch('https://api.cobalt.tools/',{
-        method:'POST',
-        headers:{
-          'Content-Type':'application/json',
-          'Accept':'application/json'
-        },
-        body:JSON.stringify({
-          url: curVid.url,
-          videoQuality: qualMap[qual]||'1080',
-          filenameStyle:'basic',
-          downloadMode:'auto'
-        })
-      });
-      const data=await res.json();
-
-      if(data.url){
-        // Got direct stream URL — download it
-        showProg('dlprog','dlbar','dlplbl','Starting download…',80);
-        await animProg('dlbar',80,100,400);
-        trigDL(data.url, fname);
-        toast('✓ Download started: '+fname,'t-ok');
-      } else if(data.status==='tunnel'&&data.url){
-        showProg('dlprog','dlbar','dlplbl','Tunnelling download…',80);
-        await animProg('dlbar',80,100,400);
-        trigDL(data.url, fname);
-        toast('✓ Download started: '+fname,'t-ok');
-      } else {
-        // cobalt returned error — open cobalt.tools as fallback
-        throw new Error(data.error?.code||'no url returned');
-      }
-    }catch(e){
-      await animProg('dlbar',75,100,300);
-      // Fallback: open cobalt.tools with URL pre-filled
-      const cobaltUrl=`https://cobalt.tools/#${encodeURIComponent(curVid.url)}`;
-      window.open(cobaltUrl,'_blank');
-      toast('ℹ Cobalt opened — the download will start there automatically','t-info');
-    }
-    hideProg('dlprog');
-    saveHistory(fname,curVid,fmt,qual,'full');
-    btn.disabled=false;
-    return;
-  }
-
-  // ── Facebook / Telegram / other ──
-  showProg('dlprog','dlbar','dlplbl','Opening video…',50);
-  await animProg('dlbar',50,100,600);
-  // Try cobalt first, fallback to original
-  try{
-    const res=await fetch('https://api.cobalt.tools/',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Accept':'application/json'},
-      body:JSON.stringify({url:curVid.url,videoQuality:'1080',filenameStyle:'basic'})
-    });
-    const data=await res.json();
-    if(data.url){
-      trigDL(data.url,fname);
-      toast('✓ Download started: '+fname,'t-ok');
-    } else throw new Error('no url');
-  }catch(e){
-    window.open(curVid.url,'_blank');
-    toast('ℹ Video opened — right-click the video → Save video as','t-info');
-  }
+  // ── All other platforms — open cobalt with URL pre-filled ──
+  // cobalt.tools accepts URL in hash, auto-starts download
+  await animProg('dlbar',50,100,500);
   hideProg('dlprog');
+
+  // Show download info card
+  showDLInfo(curVid.url, fname, qual, fmt);
   saveHistory(fname,curVid,fmt,qual,'full');
   btn.disabled=false;
+}
+
+function showDLInfo(videoUrl, fname, qual, fmt){
+  // Remove old card if exists
+  const old=document.getElementById('dlInfoCard');
+  if(old) old.remove();
+
+  const card=document.createElement('div');
+  card.id='dlInfoCard';
+  card.style.cssText='background:#12121a;border:1px solid rgba(124,92,252,.4);border-radius:10px;padding:16px;margin-top:12px';
+  card.innerHTML=`
+    <div style="font-size:12px;color:#a78bfa;font-weight:600;margin-bottom:10px">⬇ Download Options for: <span style="color:#f0eeff">${fname}</span></div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <a href="https://cobalt.tools/#${encodeURIComponent(videoUrl)}" target="_blank"
+        style="display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:#7c5cfc;color:#fff;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600">
+        <span>⬇ Download via Cobalt (Recommended)</span>
+        <span style="font-size:11px;opacity:.8">${qual} · ${fmt}</span>
+      </a>
+      <a href="https://yt1s.io/en/youtube-to-mp4?q=${encodeURIComponent(videoUrl)}" target="_blank"
+        style="display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:#1a1a26;border:1px solid rgba(255,255,255,.1);color:#f0eeff;border-radius:8px;text-decoration:none;font-size:13px;font-weight:500">
+        <span>⬇ Download via YT1S</span>
+        <span style="font-size:11px;color:#55527a">Alternative</span>
+      </a>
+      <a href="https://loader.to/api/button/?url=${encodeURIComponent(videoUrl)}&f=mp4" target="_blank"
+        style="display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:#1a1a26;border:1px solid rgba(255,255,255,.1);color:#f0eeff;border-radius:8px;text-decoration:none;font-size:13px;font-weight:500">
+        <span>⬇ Download via Loader.to</span>
+        <span style="font-size:11px;color:#55527a">Alternative</span>
+      </a>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:#55527a">
+      💡 Click any option above → the download will start in a new tab · Save file as: <b style="color:#9990cc">${fname}</b>
+    </div>
+  `;
+  // Insert after dl buttons
+  const dlBtns=document.querySelector('.dl-btns');
+  if(dlBtns) dlBtns.insertAdjacentElement('afterend',card);
 }
 
 // DOWNLOAD CLIPS ZIP — with proper timestamp guide
